@@ -92,8 +92,8 @@ fn build_libheif() {
         .arg(source_dir.as_os_str())
         .current_dir(&binary_dir);
     if is_windows {
-        configure.arg("-DCMAKE_C_FLAGS=-DLIBDE265_STATIC_BUILD");
-        configure.arg("-DCMAKE_CXX_FLAGS=-DLIBDE265_STATIC_BUILD");
+        configure.arg("-DCMAKE_C_FLAGS=/DLIBDE265_STATIC_BUILD");
+        configure.arg("-DCMAKE_CXX_FLAGS=/DLIBDE265_STATIC_BUILD");
     }
 
     run_command(&mut configure, "configure libheif");

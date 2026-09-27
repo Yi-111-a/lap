@@ -270,22 +270,27 @@ fn heif_fallback(file_path: &str, max_size: u32) -> Result<Option<Vec<u8>>, Stri
         }
     }
 
-    // 2. On all platforms, fall back to the bundled FFmpeg sidecar,
+    // 2. Files with a .heic/.heif/.hif extension that are actually JPEG/PNG/etc.
+    // (e.g. Lightroom Sync or mismatched iOS exports). Content sniffing is cheap, so it
+    // runs before spawning FFmpeg. `image` does not apply EXIF orientation, so read it here.
+    if let Ok(reader) = image::ImageReader::open(file_path) {
+        if let Ok(reader_with_format) = reader.with_guessed_format() {
+            if reader_with_format.format().is_some() {
+                if let Ok(dyn_img) = reader_with_format.decode() {
+                    let orientation = crate::t_image::get_image_orientation(file_path);
+                    return resize_dynamic_image_to_jpeg(dyn_img, orientation, max_size).map(Some);
+                }
+            }
+        }
+    }
+
+    // 3. On all platforms, fall back to the bundled FFmpeg sidecar,
     // which cleanly handles multi-tile HEVC, 10-bit HDR, and iPhone HEIC variants.
+    // FFmpeg autorotates by default and exports HEIF irot/imir as a display matrix.
     if let Ok(Some(data)) =
         crate::t_video::get_video_thumbnail_sync(file_path, max_size, None, None)
     {
         return Ok(Some(data));
-    }
-
-    // 3. Fall back to standard image decoding for files with .heic/.heif/.hif extension
-    // that are actually JPEG/PNG/etc. (e.g. Lightroom Sync or mismatched iOS export files).
-    if let Ok(reader) = image::ImageReader::open(file_path) {
-        if let Ok(reader_with_format) = reader.with_guessed_format() {
-            if let Ok(dyn_img) = reader_with_format.decode() {
-                return resize_dynamic_image_to_jpeg(dyn_img, 1, max_size).map(Some);
-            }
-        }
     }
 
     Ok(None)
