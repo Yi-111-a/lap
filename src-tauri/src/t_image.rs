@@ -131,6 +131,11 @@ pub fn get_image_dimensions(file_path: &str) -> Result<(u32, u32), String> {
         if let Ok(dimensions) = crate::t_heif::get_heif_dimensions(file_path) {
             return Ok(dimensions);
         }
+        if let Ok(metadata) = crate::t_video::get_video_metadata(file_path) {
+            if metadata.width > 0 && metadata.height > 0 {
+                return Ok((metadata.width, metadata.height));
+            }
+        }
     }
 
     // Catch potential panics in the third-party imagesize crate

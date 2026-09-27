@@ -238,9 +238,9 @@ pub fn get_heif_thumbnail(
             // libheif already applies HEIF geometric transformations (rotation/mirroring/crop).
             resize_dynamic_image_to_jpeg(dyn_img, 1, thumbnail_size).map(Some)
         }
-        // libde265 fails to decode some iPhone HEVC variants; on macOS fall
-        // back to the system ImageIO decoder (`sips`), which handles them.
-        Err(_) => heif_sips_fallback(file_path, thumbnail_size),
+        // libde265 fails to decode some iPhone HEVC variants (e.g. multi-tile grids, HDR);
+        // fall back to platform decoder (`sips` on macOS), bundled FFmpeg sidecar, or standard image decode.
+        Err(_) => heif_fallback(file_path, thumbnail_size),
     }
 }
 
@@ -257,16 +257,67 @@ pub fn get_heif_preview(
             // libheif already applies HEIF geometric transformations (rotation/mirroring/crop).
             resize_dynamic_image_to_jpeg(DynamicImage::ImageRgb8(img), 1, max_size).map(Some)
         }
-        Err(_) => heif_sips_fallback(file_path, max_size),
+        Err(_) => heif_fallback(file_path, max_size),
     }
 }
 
-#[cfg(target_os = "macos")]
-fn heif_sips_fallback(file_path: &str, max_size: u32) -> Result<Option<Vec<u8>>, String> {
-    crate::t_image::get_thumbnail_with_sips(file_path, max_size)
+fn heif_fallback(file_path: &str, max_size: u32) -> Result<Option<Vec<u8>>, String> {
+    // 1. On macOS, try the system ImageIO decoder (`sips`) first.
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(Some(data)) = crate::t_image::get_thumbnail_with_sips(file_path, max_size) {
+            return Ok(Some(data));
+        }
+    }
+
+    // 2. On all platforms, fall back to the bundled FFmpeg sidecar,
+    // which cleanly handles multi-tile HEVC, 10-bit HDR, and iPhone HEIC variants.
+    if let Ok(Some(data)) =
+        crate::t_video::get_video_thumbnail_sync(file_path, max_size, None, None)
+    {
+        return Ok(Some(data));
+    }
+
+    // 3. Fall back to standard image decoding for files with .heic/.heif/.hif extension
+    // that are actually JPEG/PNG/etc. (e.g. Lightroom Sync or mismatched iOS export files).
+    if let Ok(reader) = image::ImageReader::open(file_path) {
+        if let Ok(reader_with_format) = reader.with_guessed_format() {
+            if let Ok(dyn_img) = reader_with_format.decode() {
+                return resize_dynamic_image_to_jpeg(dyn_img, 1, max_size).map(Some);
+            }
+        }
+    }
+
+    Ok(None)
 }
 
-#[cfg(not(target_os = "macos"))]
-fn heif_sips_fallback(_file_path: &str, _max_size: u32) -> Result<Option<Vec<u8>>, String> {
-    Ok(None)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_heif_fallback_nonexistent_file() {
+        let res = heif_fallback("non_existent_file.heic", 256);
+        assert!(res.is_ok());
+        assert!(res.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_heif_fallback_mismatched_jpeg_extension() {
+        let temp_dir = std::env::temp_dir();
+        let test_path = temp_dir.join("lap_test_mismatched_image.heic");
+        let img = image::RgbImage::new(10, 10);
+        let dyn_img = DynamicImage::ImageRgb8(img);
+        dyn_img
+            .save_with_format(&test_path, image::ImageFormat::Jpeg)
+            .unwrap();
+
+        let res = heif_fallback(test_path.to_str().unwrap(), 256);
+        let _ = std::fs::remove_file(&test_path);
+
+        assert!(res.is_ok());
+        let opt = res.unwrap();
+        assert!(opt.is_some());
+        assert!(!opt.unwrap().is_empty());
+    }
 }
